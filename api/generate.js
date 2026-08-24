@@ -1,29 +1,50 @@
+# `api/generate.js`
+
+````javascript
 // api/generate.js
 // Backend serverless function (Vercel)
-// Mode teks (listing, ads, screenshot) -> Gemini API
-// Mode foto (image edit)             -> Hugging Face Inference API
+//
+// MODE TEKS:
+// listing, ads, screenshot -> Gemini API
+//
+// MODE FOTO:
+// image editing -> Hugging Face Inference Providers
+//
+// Environment Variables Vercel:
+// HF_TOKEN
+// GEMINI_API_KEY
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res.status(405).json({
+      error: "Method not allowed",
+    });
   }
 
   try {
-    const { mode, images, fields, styles } = req.body;
+    const {
+      mode,
+      images,
+      fields = {},
+      styles = [],
+    } = req.body || {};
 
     if (!mode) {
-      return res.status(400).json({ error: "Mode wajib diisi." });
+      return res.status(400).json({
+        error: "Mode wajib diisi.",
+      });
     }
 
-    if (!images || images.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "Minimal upload 1 foto/screenshot." });
+    if (!images || !Array.isArray(images) || images.length === 0) {
+      return res.status(400).json({
+        error: "Minimal upload 1 foto/screenshot.",
+      });
     }
 
     // ============================================================
     // MODE FOTO — HUGGING FACE
     // ============================================================
+
     if (mode === "foto") {
       const hfToken = process.env.HF_TOKEN;
 
@@ -42,110 +63,152 @@ export default async function handler(req, res) {
 
       const styleToPrompt = {
         "Background Putih Polos":
-          "professional e-commerce product photo, clean plain white studio background, even soft lighting, sharp focus, realistic product photography",
+          "Edit this exact product photo. Keep the product itself unchanged. Place it on a clean pure white e-commerce studio background. Soft even professional lighting, realistic photography, sharp details, natural shadows. Do not redesign, replace, distort, or change the product.",
 
         "Enhance Cahaya & Ketajaman":
-          "enhance the same product photo, brighter natural lighting, sharper details, higher clarity, professional studio photography, preserve the original product",
+          "Enhance this exact product photo while preserving the original product completely. Improve natural lighting, exposure, sharpness, clarity and detail. Make it look like a professional e-commerce studio photograph. Do not change the product shape, color, branding, text, packaging, or proportions.",
 
         "Background Studio":
-          "professional e-commerce product photo on a premium studio background with a soft grey gradient, clean dramatic catalog lighting, realistic photography",
+          "Edit this exact product photo. Preserve the original product exactly. Replace only the background with a premium professional studio environment using a subtle soft grey gradient, realistic catalog lighting and natural shadow. Do not alter the product.",
 
         "Background Lifestyle":
-          "realistic professional product photo placed in a cozy lifestyle setting appropriate for the product, natural lighting, product remains the main focus",
+          "Edit this exact product photo. Preserve the original product exactly. Place the product naturally in an attractive realistic lifestyle environment appropriate for the product. Professional commercial photography, natural lighting, realistic perspective. The product must remain the main focus and must not be redesigned.",
 
         "Tambah Badge Best Seller":
-          "professional product photo with a small tasteful BEST SELLER badge in the top corner, preserve the original product appearance",
+          "Edit this exact product photo. Preserve the original product completely. Add a small tasteful BEST SELLER badge in an appropriate corner of the image. Keep the badge subtle and professional. Do not change the product, packaging, branding, logo, colors, shape, or text.",
 
         "Tambah Watermark Brand":
-          "professional product photo with a small subtle brand watermark in the bottom corner, preserve the original product appearance",
+          "Edit this exact product photo. Preserve the original product completely. Add a small subtle brand watermark in the bottom corner. Keep it professional and unobtrusive. Do not alter the original product.",
       };
 
       const baseImage = images[0];
+
+      if (!baseImage.base64) {
+        return res.status(400).json({
+          error: "Data gambar tidak ditemukan.",
+        });
+      }
+
       const results = [];
 
       /*
-       * Hugging Face model.
+       * Hugging Face Inference Providers
        *
-       * Model:
+       * Model image editing:
        * black-forest-labs/FLUX.1-Kontext-dev
        *
-       * This is an image editing model and is suitable for
-       * instruction-based image editing.
+       * Hugging Face documents this model as an
+       * image-to-image model suitable for image editing.
        */
+
       const model =
         "black-forest-labs/FLUX.1-Kontext-dev";
 
       async function callHuggingFace(promptText) {
         try {
-          // Convert base64 from frontend to binary
+          /*
+           * Convert frontend base64 -> binary
+           */
           const imageBuffer = Buffer.from(
             baseImage.base64,
             "base64"
           );
 
           /*
-           * Hugging Face Inference API:
+           * Use multipart/form-data.
            *
-           * The request uses multipart/form-data:
-           * - prompt
-           * - input image
+           * We deliberately do NOT manually set
+           * Content-Type because fetch/FormData
+           * automatically generates the multipart boundary.
            */
 
           const formData = new FormData();
 
-          formData.append("prompt", promptText);
-
-          const blob = new Blob([imageBuffer], {
-            type: baseImage.mediaType || "image/jpeg",
-          });
-
           formData.append(
             "image",
-            blob,
+            new Blob([imageBuffer], {
+              type:
+                baseImage.mediaType ||
+                "image/jpeg",
+            }),
             "product-image.jpg"
           );
 
+          formData.append(
+            "prompt",
+            promptText
+          );
+
+          /*
+           * Hugging Face router.
+           *
+           * The router handles provider routing.
+           */
           const hfRes = await fetch(
             `https://router.huggingface.co/hf-inference/models/${model}`,
             {
               method: "POST",
+
               headers: {
                 Authorization: `Bearer ${hfToken}`,
               },
+
               body: formData,
             }
           );
 
+          /*
+           * Read response based on status.
+           */
           if (!hfRes.ok) {
-            const errorText = await hfRes.text();
+            const errorText =
+              await hfRes.text();
 
             console.error(
-              "Hugging Face error:",
+              "Hugging Face HTTP error:",
+              hfRes.status,
               errorText
             );
 
             return {
               success: false,
+
               error:
-                "Hugging Face error: " +
-                errorText.slice(0, 500),
+                `Hugging Face error (${hfRes.status}): ` +
+                errorText.slice(0, 1000),
             };
           }
 
-          // Hugging Face returns image binary
+          /*
+           * Hugging Face returns the generated
+           * image as binary data.
+           */
           const arrayBuffer =
             await hfRes.arrayBuffer();
 
-          const base64Out = Buffer.from(
-            arrayBuffer
-          ).toString("base64");
+          const outputBuffer =
+            Buffer.from(arrayBuffer);
+
+          if (!outputBuffer.length) {
+            return {
+              success: false,
+              error:
+                "Hugging Face mengembalikan gambar kosong.",
+            };
+          }
+
+          const base64Out =
+            outputBuffer.toString("base64");
+
+          const mimeType =
+            hfRes.headers.get(
+              "content-type"
+            ) || "image/png";
 
           return {
             success: true,
             base64: base64Out,
-            mimeType:
-              hfRes.headers.get("content-type") ||
-              "image/png",
+            mimeType,
           };
         } catch (err) {
           console.error(
@@ -162,14 +225,18 @@ export default async function handler(req, res) {
         }
       }
 
-      // Generate setiap gaya yang dipilih
+      /*
+       * Generate every selected style.
+       */
       for (const style of styles) {
         const promptText =
           styleToPrompt[style] ||
-          `professional product photography, ${style}, preserve the original product`;
+          `Edit this exact product photo according to this style: ${style}. Preserve the original product completely and make the result look like realistic professional commercial product photography.`;
 
         const result =
-          await callHuggingFace(promptText);
+          await callHuggingFace(
+            promptText
+          );
 
         if (result.success) {
           results.push({
@@ -196,7 +263,8 @@ export default async function handler(req, res) {
     // MODE TEKS — GEMINI API
     // ============================================================
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey =
+      process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return res.status(500).json({
@@ -213,6 +281,7 @@ export default async function handler(req, res) {
 
     if (mode === "listing") {
       promptText = `Buatkan listing produk marketplace Indonesia berdasarkan foto yang dilampirkan.
+
 Nama: ${fields.nama || "-"}
 Kategori: ${fields.kategori || "tebak dari foto"}
 Harga: ${fields.harga || "-"}
@@ -339,6 +408,7 @@ Balas HANYA JSON tanpa markdown fence:
           data: img.base64,
         },
       })),
+
       {
         text: promptText,
       },
@@ -348,9 +418,12 @@ Balas HANYA JSON tanpa markdown fence:
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
+
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type":
+            "application/json",
         },
+
         body: JSON.stringify({
           contents: [
             {
@@ -361,7 +434,8 @@ Balas HANYA JSON tanpa markdown fence:
       }
     );
 
-    const data = await geminiRes.json();
+    const data =
+      await geminiRes.json();
 
     if (!geminiRes.ok) {
       console.error(
@@ -370,7 +444,8 @@ Balas HANYA JSON tanpa markdown fence:
       );
 
       return res.status(502).json({
-        error: "Gagal memanggil Gemini API.",
+        error:
+          "Gagal memanggil Gemini API.",
         detail: data,
       });
     }
@@ -380,13 +455,17 @@ Balas HANYA JSON tanpa markdown fence:
         ?.text || "";
 
     const cleaned = rawText
-      .replace(/```json|```/g, "")
+      .replace(
+        /```json|```/g,
+        ""
+      )
       .trim();
 
     let parsed;
 
     try {
-      parsed = JSON.parse(cleaned);
+      parsed =
+        JSON.parse(cleaned);
     } catch (e) {
       console.error(
         "Gagal parse JSON dari Gemini:",
@@ -404,11 +483,16 @@ Balas HANYA JSON tanpa markdown fence:
       result: parsed,
     });
   } catch (err) {
-    console.error(err);
+    console.error(
+      "Server error:",
+      err
+    );
 
     return res.status(500).json({
-      error: "Terjadi kesalahan server.",
+      error:
+        "Terjadi kesalahan server.",
       detail: String(err),
     });
   }
 }
+````
