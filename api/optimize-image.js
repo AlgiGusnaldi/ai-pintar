@@ -60,6 +60,9 @@ Keluarkan gambar hasil optimasi.
               ],
             },
           ],
+          generationConfig: {
+            responseModalities: ["IMAGE"],
+          },
         }),
       }
     );
