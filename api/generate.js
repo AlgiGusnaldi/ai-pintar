@@ -37,16 +37,14 @@ export default async function handler(req, res) {
       const baseImage = images[0]; // pakai foto pertama sebagai sumber
       const results = [];
 
-      // Model utama + model cadangan (kalau model utama penuh terus, coba yang ini)
-      const modelsToTry = [
-        "@cf/runwayml/stable-diffusion-v1-5-img2img",
-        "@cf/lykon/dreamshaper-8-lcm",
-      ];
+      // Hanya pakai 1 model — model lain (dreamshaper, dll) beda format input,
+      // tidak kompatibel dengan image_b64 img2img seperti ini
+      const modelsToTry = ["@cf/runwayml/stable-diffusion-v1-5-img2img"];
 
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
       async function callCloudflareWithRetry(promptText) {
-        const maxRetriesPerModel = 3;
+        const maxRetriesPerModel = 5;
 
         for (const model of modelsToTry) {
           for (let attempt = 1; attempt <= maxRetriesPerModel; attempt++) {
@@ -87,8 +85,8 @@ export default async function handler(req, res) {
               );
 
               if (isCapacityIssue && attempt < maxRetriesPerModel) {
-                // Tunggu sebentar sebelum coba lagi (backoff bertahap)
-                await sleep(1500 * attempt);
+                // Tunggu sebentar sebelum coba lagi (backoff bertahap, makin lama tiap gagal)
+                await sleep(2000 * attempt);
                 continue;
               }
 
