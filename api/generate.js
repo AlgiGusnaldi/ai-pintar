@@ -1,6 +1,3 @@
-# `api/generate.js`
-
-````javascript
 // api/generate.js
 // Backend serverless function (Vercel)
 //
