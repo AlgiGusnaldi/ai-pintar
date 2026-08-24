@@ -462,14 +462,62 @@ async function generate(panel){
   out.classList.add('show');
   out.scrollIntoView({behavior:'smooth', block:'nearest'});
 
- if(panel === 'foto'){
+if(panel === 'foto'){
   const images = fileStore.f2;
   const resultBox = document.getElementById('foto-result');
+  const styles = Array.from(
+    document.querySelectorAll('[data-group="gayafoto"] .chip.on')
+  ).map(chip => chip.textContent);
 
   if(!images || images.length === 0){
     resultBox.innerHTML = '<pre>Upload foto produk dulu ya.</pre>';
     return;
   }
+  if(styles.length === 0){
+    resultBox.innerHTML = '<pre>Pilih minimal 1 gaya dulu ya.</pre>';
+    return;
+  }
+
+  resultBox.innerHTML = '<pre>Sedang mengoptimalkan foto...</pre>';
+
+  try{
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ mode: 'foto', images, styles })
+    });
+    const data = await res.json();
+
+    if(!res.ok){
+      resultBox.innerHTML = '<pre>Gagal mengoptimalkan foto: ' + (data.error || 'coba lagi.') + '</pre>';
+      console.error('Optimize image error:', data);
+      return;
+    }
+
+    resultBox.innerHTML = '';
+    resultBox.style.display = 'grid';
+    resultBox.style.gridTemplateColumns = 'repeat(auto-fill,minmax(180px,1fr))';
+    resultBox.style.gap = '14px';
+
+    (data.result?.images || []).forEach(item=>{
+      const box = document.createElement('div');
+      if(item.error){
+        box.innerHTML = '<p class="hint">' + item.style + ': ' + item.error + '</p>';
+      } else {
+        const src = 'data:' + item.mimeType + ';base64,' + item.base64;
+        box.innerHTML =
+          '<p class="hint" style="font-weight:600">' + item.style + '</p>' +
+          '<img src="' + src + '" style="max-width:100%;border-radius:10px;display:block;margin-bottom:8px">' +
+          '<a href="' + src + '" download="foto-' + item.style.replace(/\s+/g,'-').toLowerCase() + '.png" style="display:inline-block;padding:8px 14px;background:var(--blue);color:#fff;border-radius:8px;text-decoration:none;font-weight:700;font-size:12px">Download</a>';
+      }
+      resultBox.appendChild(box);
+    });
+  } catch(err){
+    console.error(err);
+    resultBox.innerHTML = '<pre>Terjadi kesalahan koneksi, coba lagi.</pre>';
+  }
+  return;
+}
 
   resultBox.innerHTML = '<pre>Sedang mengoptimalkan foto...</pre>';
 
