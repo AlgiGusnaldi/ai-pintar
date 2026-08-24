@@ -60,11 +60,11 @@ export default async function handler(req, res) {
           );
 
           if (!cfRes.ok) {
-            const errText = await cfRes.text();
-            console.error("Cloudflare AI error:", errText);
-            results.push({ style, error: "Gagal generate gambar dari Cloudflare." });
-            continue;
-          }
+  const errText = await cfRes.text();
+  console.error("Cloudflare AI error:", errText);
+  results.push({ style, error: "CF error: " + errText.slice(0, 300) });
+  continue;
+}
 
           // Respons sukses = binary image stream (bukan JSON)
           const arrayBuffer = await cfRes.arrayBuffer();
