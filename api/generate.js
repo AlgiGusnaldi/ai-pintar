@@ -492,4 +492,3 @@ Balas HANYA JSON tanpa markdown fence:
     });
   }
 }
-````
