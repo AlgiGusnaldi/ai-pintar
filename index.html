@@ -266,8 +266,13 @@ footer{text-align:center; font-size:11.5px; color:var(--text-soft); margin-top:2
     <button class="gen-btn" onclick="generate('foto')">Generate</button>
 
     <div class="output" id="out-foto">
-      <div class="result-card"><span class="rlabel">Preview Hasil</span><pre>Menunggu di-generate... (beberapa versi foto akan tampil berdampingan di sini)</pre></div>
+  <div class="result-card">
+    <span class="rlabel">Preview Hasil</span>
+    <div id="foto-result" style="text-align:center;">
+      <pre>Menunggu di-generate...</pre>
     </div>
+  </div>
+</div>
   </section>
 
   <section class="panel" id="ads">
@@ -457,12 +462,82 @@ async function generate(panel){
   out.classList.add('show');
   out.scrollIntoView({behavior:'smooth', block:'nearest'});
 
-  if(panel === 'foto'){
-    out.querySelectorAll('pre').forEach(p=>{
-      p.textContent = 'Fitur ini belum tersambung API image-generation. Belum bisa dites.';
-    });
+ if(panel === 'foto'){
+  const images = fileStore.f2;
+  const resultBox = document.getElementById('foto-result');
+
+  if(!images || images.length === 0){
+    resultBox.innerHTML = '<pre>Upload foto produk dulu ya.</pre>';
     return;
   }
+
+  resultBox.innerHTML = '<pre>Sedang mengoptimalkan foto...</pre>';
+
+  const gaya = Array.from(
+    document.querySelectorAll('[data-group="gayafoto"] .chip.on')
+  ).map(chip => chip.textContent);
+
+  try{
+    const res = await fetch('/api/optimize-image', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        image: images[0].base64,
+        mimeType: images[0].mediaType,
+        gaya
+      })
+    });
+
+    const data = await res.json();
+
+    if(!res.ok){
+      resultBox.innerHTML =
+        '<pre>Gagal mengoptimalkan foto: ' +
+        (data.error || 'coba lagi.') +
+        '</pre>';
+      console.error('Optimize image error:', data);
+      return;
+    }
+
+    if(!data.image){
+      resultBox.innerHTML =
+        '<pre>AI tidak mengembalikan gambar. Coba lagi.</pre>';
+      return;
+    }
+
+    resultBox.innerHTML = '';
+
+    const img = document.createElement('img');
+    img.src = `data:${data.mimeType || 'image/png'};base64,${data.image}`;
+    img.style.maxWidth = '100%';
+    img.style.borderRadius = '10px';
+    img.style.display = 'block';
+    img.style.margin = '0 auto 14px';
+
+    const downloadBtn = document.createElement('a');
+    downloadBtn.href = img.src;
+    downloadBtn.download = 'foto-produk-optimized.png';
+    downloadBtn.textContent = 'Download Foto Hasil';
+    downloadBtn.style.display = 'inline-block';
+    downloadBtn.style.padding = '10px 16px';
+    downloadBtn.style.background = 'var(--blue)';
+    downloadBtn.style.color = '#fff';
+    downloadBtn.style.borderRadius = '8px';
+    downloadBtn.style.textDecoration = 'none';
+    downloadBtn.style.fontWeight = '700';
+    downloadBtn.style.fontSize = '13px';
+
+    resultBox.appendChild(img);
+    resultBox.appendChild(downloadBtn);
+
+  } catch(err){
+    console.error(err);
+    resultBox.innerHTML =
+      '<pre>Terjadi kesalahan koneksi, coba lagi.</pre>';
+  }
+
+  return;
+}
 
   let mode, images, fields;
 
