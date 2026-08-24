@@ -118,7 +118,15 @@ textarea{min-height:72px; resize:vertical}
 .upload-box p{margin:8px 0 0; font-size:12.5px; color:var(--text-soft); font-weight:500}
 .upload-box .plus{font-size:22px}
 .thumbs{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
-.thumbs .t{width:56px; height:56px; border:1.5px solid var(--line); border-radius:8px; background:var(--blue-soft)}
+.thumbs .t{
+  width:56px; height:56px; border:1.5px solid var(--line); border-radius:8px;
+  background-size:cover; background-position:center; position:relative;
+}
+.thumbs .t .del{
+  position:absolute; top:-6px; right:-6px; width:18px; height:18px; border-radius:50%;
+  background:#ef4444; color:#fff; font-size:11px; font-weight:700; border:none;
+  cursor:pointer; line-height:18px; text-align:center; padding:0;
+}
 
 .gen-btn{
   margin-top:6px; width:100%; padding:15px; border:none; border-radius:10px;
@@ -137,6 +145,10 @@ textarea{min-height:72px; resize:vertical}
 .result-card .rlabel{
   display:inline-block; font-size:11px; font-weight:700; background:var(--blue-soft); color:var(--blue);
   padding:3px 10px; border-radius:6px; margin-bottom:9px; text-transform:uppercase; letter-spacing:.3px;
+}
+.copy-btn{
+  float:right; font-size:11px; font-weight:700; background:var(--blue-soft); color:var(--blue);
+  border:none; padding:4px 10px; border-radius:6px; cursor:pointer;
 }
 .result-card pre{white-space:pre-wrap; font-family:'Inter',sans-serif; font-size:13.5px; margin:0; line-height:1.6; color:var(--text)}
 
@@ -360,7 +372,7 @@ document.querySelectorAll('.chip-group').forEach(group=>{
   });
 });
 
-// simpan file terbaca (base64) per input, biar bisa dipakai saat generate
+// simpan file terbaca (base64 + dataUrl) per input, biar bisa dipakai saat generate & ditampilkan sebagai thumbnail
 const fileStore = { f1: [], f2: [], f3: [], f4: [] };
 
 function fileToBase64(file){
@@ -368,24 +380,42 @@ function fileToBase64(file){
     const reader = new FileReader();
     reader.onload = () => resolve({
       mediaType: file.type,
-      base64: reader.result.split(',')[1]
+      base64: reader.result.split(',')[1],
+      dataUrl: reader.result
     });
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
 }
 
+function renderThumbs(inputId, thumbId){
+  const box = document.getElementById(thumbId);
+  box.innerHTML = '';
+  fileStore[inputId].forEach((item, idx)=>{
+    const t = document.createElement('div');
+    t.className = 't';
+    t.style.backgroundImage = `url(${item.dataUrl})`;
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'del';
+    del.textContent = '×';
+    del.onclick = (e)=>{
+      e.stopPropagation();
+      fileStore[inputId].splice(idx,1);
+      renderThumbs(inputId, thumbId);
+    };
+    t.appendChild(del);
+    box.appendChild(t);
+  });
+}
+
 function bindUpload(inputId, thumbId){
   document.getElementById(inputId).addEventListener('change', async (e)=>{
-    const box = document.getElementById(thumbId);
-    box.innerHTML = '';
-    const files = Array.from(e.target.files);
-    files.forEach(()=>{
-      const t = document.createElement('div');
-      t.className = 't';
-      box.appendChild(t);
-    });
-    fileStore[inputId] = await Promise.all(files.map(fileToBase64));
+    const newFiles = Array.from(e.target.files);
+    const newItems = await Promise.all(newFiles.map(fileToBase64));
+    fileStore[inputId] = fileStore[inputId].concat(newItems);
+    renderThumbs(inputId, thumbId);
+    e.target.value = ''; // reset supaya bisa pilih file yang sama lagi kalau perlu
   });
 }
 bindUpload('f1','thumbs1');
@@ -481,6 +511,23 @@ async function generate(panel){
     out.querySelectorAll('pre').forEach(p=>{ p.textContent = 'Terjadi kesalahan koneksi, coba lagi.'; });
   }
 }
+
+// tombol Copy otomatis untuk semua result-card
+document.querySelectorAll('.result-card').forEach(card=>{
+  const label = card.querySelector('.rlabel');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'copy-btn';
+  btn.textContent = 'Copy';
+  btn.onclick = () => {
+    const text = card.querySelector('pre').textContent;
+    navigator.clipboard.writeText(text).then(()=>{
+      btn.textContent = 'Tersalin!';
+      setTimeout(()=> btn.textContent = 'Copy', 1500);
+    });
+  };
+  label.insertAdjacentElement('afterend', btn);
+});
 </script>
 </body>
 </html>
