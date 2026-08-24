@@ -1,7 +1,7 @@
 // api/generate.js
 // Backend serverless function (Vercel)
 // Mode teks (listing, ads, screenshot) -> Gemini API
-// Mode foto (image edit)             -> Gemini Image (gemini-2.5-flash-image)
+// Mode foto (image edit)             -> Cloudflare Workers AI (gratis, dengan retry)
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -14,92 +14,116 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Minimal upload 1 foto/screenshot." });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({ error: "GEMINI_API_KEY belum diset di environment variable Vercel." });
-    }
-
-    // ===== MODE FOTO — Gemini Image (gemini-2.5-flash-image) =====
+    // ===== MODE FOTO — Cloudflare Workers AI (gratis, dengan retry) =====
     if (mode === "foto") {
+      const cfAccountId = process.env.CF_ACCOUNT_ID;
+      const cfToken = process.env.CF_API_TOKEN;
+      if (!cfAccountId || !cfToken) {
+        return res.status(500).json({ error: "CF_ACCOUNT_ID / CF_API_TOKEN belum diset di environment variable Vercel." });
+      }
       if (!styles || styles.length === 0) {
         return res.status(400).json({ error: "Pilih minimal 1 gaya foto." });
       }
 
       const styleToPrompt = {
-        "Background Putih Polos": "ubah background foto produk ini menjadi putih polos bersih, pencahayaan studio merata, produk tetap fokus tajam, hasil seperti foto e-commerce profesional",
-        "Enhance Cahaya & Ketajaman": "perbaiki foto produk ini agar lebih terang, tajam, dan jelas, dengan pencahayaan studio profesional, background tetap sama",
-        "Background Studio": "ubah background foto produk ini menjadi studio profesional dengan gradasi abu-abu lembut, pencahayaan dramatis ala katalog",
-        "Background Lifestyle": "tempatkan produk ini dalam suasana lifestyle yang nyaman dan relevan dengan produknya, pencahayaan natural, produk tetap jadi fokus utama",
-        "Tambah Badge Best Seller": "tambahkan badge kecil bertuliskan BEST SELLER berwarna di pojok foto produk ini, produk tidak diubah",
-        "Tambah Watermark Brand": "tambahkan watermark teks brand kecil dan halus di pojok bawah foto produk ini, produk tidak diubah",
+        "Background Putih Polos": "product photo on a clean plain white studio background, even soft lighting, product in sharp focus, professional e-commerce photo",
+        "Enhance Cahaya & Ketajaman": "the same product photo, brighter, sharper, higher clarity, professional studio lighting, same background",
+        "Background Studio": "product photo on a professional studio background with soft grey gradient, dramatic catalog-style lighting",
+        "Background Lifestyle": "product photo placed in a cozy lifestyle setting relevant to the product, natural light, product remains the main focus",
+        "Tambah Badge Best Seller": "product photo with a small colorful BEST SELLER badge label in the top corner, product unchanged",
+        "Tambah Watermark Brand": "product photo with a small subtle brand watermark text in the bottom corner, product unchanged"
       };
 
       const baseImage = images[0]; // pakai foto pertama sebagai sumber
       const results = [];
 
-      for (const style of styles) {
-        const promptText = `
-Optimalkan foto produk ini untuk digunakan sebagai foto marketplace Indonesia.
-ATURAN PENTING:
-- Pertahankan produk asli dan identitas produk (bentuk, desain, logo, tulisan pada produk).
-- Jangan membuat produk baru atau menambahkan produk lain.
-- Jangan membuat hasil terlihat seperti gambar AI.
-Instruksi spesifik: ${styleToPrompt[style] || style}
-Keluarkan gambar hasil optimasi.
-`;
+      // Model utama + model cadangan (kalau model utama penuh terus, coba yang ini)
+      const modelsToTry = [
+        "@cf/runwayml/stable-diffusion-v1-5-img2img",
+        "@cf/lykon/dreamshaper-8-lcm",
+      ];
 
-        try {
-          const geminiRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${apiKey}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contents: [
-                  {
-                    parts: [
-                      {
-                        inline_data: {
-                          mime_type: baseImage.mediaType || "image/jpeg",
-                          data: baseImage.base64,
-                        },
-                      },
-                      { text: promptText },
-                    ],
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      async function callCloudflareWithRetry(promptText) {
+        const maxRetriesPerModel = 3;
+
+        for (const model of modelsToTry) {
+          for (let attempt = 1; attempt <= maxRetriesPerModel; attempt++) {
+            try {
+              const cfRes = await fetch(
+                `https://api.cloudflare.com/client/v4/accounts/${cfAccountId}/ai/run/${model}`,
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${cfToken}`,
+                    "Content-Type": "application/json",
                   },
-                ],
-                generationConfig: { responseModalities: ["IMAGE"] },
-              }),
+                  body: JSON.stringify({
+                    prompt: promptText,
+                    image_b64: baseImage.base64,
+                    num_steps: 20,
+                    strength: 0.55,
+                    guidance: 7.5,
+                  }),
+                }
+              );
+
+              if (cfRes.ok) {
+                // Sukses — respons binary image stream
+                const arrayBuffer = await cfRes.arrayBuffer();
+                const base64Out = Buffer.from(arrayBuffer).toString("base64");
+                return { success: true, base64: base64Out, mimeType: "image/png" };
+              }
+
+              // Kalau gagal, cek apakah karena capacity exceeded (bisa di-retry)
+              const errText = await cfRes.text();
+              const isCapacityIssue =
+                errText.includes("3040") || errText.toLowerCase().includes("capacity");
+
+              console.error(
+                `Cloudflare AI error (model: ${model}, attempt: ${attempt}):`,
+                errText
+              );
+
+              if (isCapacityIssue && attempt < maxRetriesPerModel) {
+                // Tunggu sebentar sebelum coba lagi (backoff bertahap)
+                await sleep(1500 * attempt);
+                continue;
+              }
+
+              if (isCapacityIssue) {
+                // Sudah retry maksimal di model ini, lanjut coba model berikutnya
+                break;
+              }
+
+              // Error lain (bukan capacity) — langsung berhenti, gak perlu retry
+              return { success: false, error: "CF error: " + errText.slice(0, 300) };
+            } catch (innerErr) {
+              console.error(`Cloudflare fetch error (model: ${model}, attempt: ${attempt}):`, innerErr);
+              if (attempt < maxRetriesPerModel) {
+                await sleep(1500 * attempt);
+                continue;
+              }
+              break;
             }
-          );
-
-          const data = await geminiRes.json();
-
-          if (!geminiRes.ok) {
-            console.error("Gemini image error:", data);
-            results.push({ style, error: "Gagal memproses foto dengan Gemini." });
-            continue;
           }
+        }
 
-          const parts = data?.candidates?.[0]?.content?.parts || [];
-          const imagePart = parts.find(
-            (part) => part?.inlineData?.data || part?.inline_data?.data
-          );
+        return {
+          success: false,
+          error: "Server Cloudflare AI sedang penuh setelah beberapa kali dicoba. Coba lagi beberapa saat lagi.",
+        };
+      }
 
-          if (!imagePart) {
-            console.error("Gemini tidak mengembalikan gambar:", data);
-            results.push({ style, error: "Gemini tidak mengembalikan gambar hasil optimasi." });
-            continue;
-          }
+      for (const style of styles) {
+        const promptText = styleToPrompt[style] || `product photo, style: ${style}`;
+        const result = await callCloudflareWithRetry(promptText);
 
-          const resultImage = imagePart?.inlineData?.data || imagePart?.inline_data?.data;
-          const resultMimeType =
-            imagePart?.inlineData?.mimeType || imagePart?.inline_data?.mime_type || "image/png";
-
-          results.push({ style, mimeType: resultMimeType, base64: resultImage });
-        } catch (innerErr) {
-          console.error("Gemini fetch error:", innerErr);
-          results.push({ style, error: "Terjadi kesalahan saat memanggil Gemini." });
+        if (result.success) {
+          results.push({ style, mimeType: result.mimeType, base64: result.base64 });
+        } else {
+          results.push({ style, error: result.error });
         }
       }
 
@@ -107,6 +131,11 @@ Keluarkan gambar hasil optimasi.
     }
 
     // ===== MODE TEKS (listing, ads, screenshot) — Gemini API =====
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "GEMINI_API_KEY belum diset di environment variable Vercel." });
+    }
+
     let promptText = "";
     if (mode === "listing") {
       promptText = `Buatkan listing produk marketplace Indonesia berdasarkan foto yang dilampirkan.
