@@ -1,7 +1,8 @@
 // api/generate.js
 // Backend serverless function (Vercel)
 // Mode teks (listing, ads, screenshot) -> Gemini API
-// Mode foto (image edit)             -> Cloudflare Workers AI (gratis, dengan retry)
+// Mode foto (image edit)             -> Hugging Face Inference API
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -9,132 +10,207 @@ export default async function handler(req, res) {
 
   try {
     const { mode, images, fields, styles } = req.body;
-    if (!mode) return res.status(400).json({ error: "Mode wajib diisi." });
-    if (!images || images.length === 0) {
-      return res.status(400).json({ error: "Minimal upload 1 foto/screenshot." });
+
+    if (!mode) {
+      return res.status(400).json({ error: "Mode wajib diisi." });
     }
 
-    // ===== MODE FOTO — Cloudflare Workers AI (gratis, dengan retry) =====
+    if (!images || images.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "Minimal upload 1 foto/screenshot." });
+    }
+
+    // ============================================================
+    // MODE FOTO — HUGGING FACE
+    // ============================================================
     if (mode === "foto") {
-      const cfAccountId = process.env.CF_ACCOUNT_ID;
-      const cfToken = process.env.CF_API_TOKEN;
-      if (!cfAccountId || !cfToken) {
-        return res.status(500).json({ error: "CF_ACCOUNT_ID / CF_API_TOKEN belum diset di environment variable Vercel." });
+      const hfToken = process.env.HF_TOKEN;
+
+      if (!hfToken) {
+        return res.status(500).json({
+          error:
+            "HF_TOKEN belum diset di Environment Variable Vercel.",
+        });
       }
+
       if (!styles || styles.length === 0) {
-        return res.status(400).json({ error: "Pilih minimal 1 gaya foto." });
+        return res.status(400).json({
+          error: "Pilih minimal 1 gaya foto.",
+        });
       }
 
       const styleToPrompt = {
-        "Background Putih Polos": "product photo on a clean plain white studio background, even soft lighting, product in sharp focus, professional e-commerce photo",
-        "Enhance Cahaya & Ketajaman": "the same product photo, brighter, sharper, higher clarity, professional studio lighting, same background",
-        "Background Studio": "product photo on a professional studio background with soft grey gradient, dramatic catalog-style lighting",
-        "Background Lifestyle": "product photo placed in a cozy lifestyle setting relevant to the product, natural light, product remains the main focus",
-        "Tambah Badge Best Seller": "product photo with a small colorful BEST SELLER badge label in the top corner, product unchanged",
-        "Tambah Watermark Brand": "product photo with a small subtle brand watermark text in the bottom corner, product unchanged"
+        "Background Putih Polos":
+          "professional e-commerce product photo, clean plain white studio background, even soft lighting, sharp focus, realistic product photography",
+
+        "Enhance Cahaya & Ketajaman":
+          "enhance the same product photo, brighter natural lighting, sharper details, higher clarity, professional studio photography, preserve the original product",
+
+        "Background Studio":
+          "professional e-commerce product photo on a premium studio background with a soft grey gradient, clean dramatic catalog lighting, realistic photography",
+
+        "Background Lifestyle":
+          "realistic professional product photo placed in a cozy lifestyle setting appropriate for the product, natural lighting, product remains the main focus",
+
+        "Tambah Badge Best Seller":
+          "professional product photo with a small tasteful BEST SELLER badge in the top corner, preserve the original product appearance",
+
+        "Tambah Watermark Brand":
+          "professional product photo with a small subtle brand watermark in the bottom corner, preserve the original product appearance",
       };
 
-      const baseImage = images[0]; // pakai foto pertama sebagai sumber
+      const baseImage = images[0];
       const results = [];
 
-      // Hanya pakai 1 model — model lain (dreamshaper, dll) beda format input,
-      // tidak kompatibel dengan image_b64 img2img seperti ini
-      const modelsToTry = ["@cf/runwayml/stable-diffusion-v1-5-img2img"];
+      /*
+       * Hugging Face model.
+       *
+       * Model:
+       * black-forest-labs/FLUX.1-Kontext-dev
+       *
+       * This is an image editing model and is suitable for
+       * instruction-based image editing.
+       */
+      const model =
+        "black-forest-labs/FLUX.1-Kontext-dev";
 
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      async function callHuggingFace(promptText) {
+        try {
+          // Convert base64 from frontend to binary
+          const imageBuffer = Buffer.from(
+            baseImage.base64,
+            "base64"
+          );
 
-      async function callCloudflareWithRetry(promptText) {
-        const maxRetriesPerModel = 5;
+          /*
+           * Hugging Face Inference API:
+           *
+           * The request uses multipart/form-data:
+           * - prompt
+           * - input image
+           */
 
-        for (const model of modelsToTry) {
-          for (let attempt = 1; attempt <= maxRetriesPerModel; attempt++) {
-            try {
-              const cfRes = await fetch(
-                `https://api.cloudflare.com/client/v4/accounts/${cfAccountId}/ai/run/${model}`,
-                {
-                  method: "POST",
-                  headers: {
-                    Authorization: `Bearer ${cfToken}`,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    prompt: promptText,
-                    image_b64: baseImage.base64,
-                    num_steps: 20,
-                    strength: 0.55,
-                    guidance: 7.5,
-                  }),
-                }
-              );
+          const formData = new FormData();
 
-              if (cfRes.ok) {
-                // Sukses — respons binary image stream
-                const arrayBuffer = await cfRes.arrayBuffer();
-                const base64Out = Buffer.from(arrayBuffer).toString("base64");
-                return { success: true, base64: base64Out, mimeType: "image/png" };
-              }
+          formData.append("prompt", promptText);
 
-              // Kalau gagal, cek apakah karena capacity exceeded (bisa di-retry)
-              const errText = await cfRes.text();
-              const isCapacityIssue =
-                errText.includes("3040") || errText.toLowerCase().includes("capacity");
+          const blob = new Blob([imageBuffer], {
+            type: baseImage.mediaType || "image/jpeg",
+          });
 
-              console.error(
-                `Cloudflare AI error (model: ${model}, attempt: ${attempt}):`,
-                errText
-              );
+          formData.append(
+            "image",
+            blob,
+            "product-image.jpg"
+          );
 
-              if (isCapacityIssue && attempt < maxRetriesPerModel) {
-                // Tunggu sebentar sebelum coba lagi (backoff bertahap, makin lama tiap gagal)
-                await sleep(2000 * attempt);
-                continue;
-              }
-
-              if (isCapacityIssue) {
-                // Sudah retry maksimal di model ini, lanjut coba model berikutnya
-                break;
-              }
-
-              // Error lain (bukan capacity) — langsung berhenti, gak perlu retry
-              return { success: false, error: "CF error: " + errText.slice(0, 300) };
-            } catch (innerErr) {
-              console.error(`Cloudflare fetch error (model: ${model}, attempt: ${attempt}):`, innerErr);
-              if (attempt < maxRetriesPerModel) {
-                await sleep(1500 * attempt);
-                continue;
-              }
-              break;
+          const hfRes = await fetch(
+            `https://router.huggingface.co/hf-inference/models/${model}`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${hfToken}`,
+              },
+              body: formData,
             }
-          }
-        }
+          );
 
-        return {
-          success: false,
-          error: "Server Cloudflare AI sedang penuh setelah beberapa kali dicoba. Coba lagi beberapa saat lagi.",
-        };
+          if (!hfRes.ok) {
+            const errorText = await hfRes.text();
+
+            console.error(
+              "Hugging Face error:",
+              errorText
+            );
+
+            return {
+              success: false,
+              error:
+                "Hugging Face error: " +
+                errorText.slice(0, 500),
+            };
+          }
+
+          // Hugging Face returns image binary
+          const arrayBuffer =
+            await hfRes.arrayBuffer();
+
+          const base64Out = Buffer.from(
+            arrayBuffer
+          ).toString("base64");
+
+          return {
+            success: true,
+            base64: base64Out,
+            mimeType:
+              hfRes.headers.get("content-type") ||
+              "image/png",
+          };
+        } catch (err) {
+          console.error(
+            "Hugging Face fetch error:",
+            err
+          );
+
+          return {
+            success: false,
+            error:
+              "Gagal menghubungi Hugging Face: " +
+              String(err),
+          };
+        }
       }
 
+      // Generate setiap gaya yang dipilih
       for (const style of styles) {
-        const promptText = styleToPrompt[style] || `product photo, style: ${style}`;
-        const result = await callCloudflareWithRetry(promptText);
+        const promptText =
+          styleToPrompt[style] ||
+          `professional product photography, ${style}, preserve the original product`;
+
+        const result =
+          await callHuggingFace(promptText);
 
         if (result.success) {
-          results.push({ style, mimeType: result.mimeType, base64: result.base64 });
+          results.push({
+            style,
+            mimeType: result.mimeType,
+            base64: result.base64,
+          });
         } else {
-          results.push({ style, error: result.error });
+          results.push({
+            style,
+            error: result.error,
+          });
         }
       }
 
-      return res.status(200).json({ result: { images: results } });
+      return res.status(200).json({
+        result: {
+          images: results,
+        },
+      });
     }
 
-    // ===== MODE TEKS (listing, ads, screenshot) — Gemini API =====
+    // ============================================================
+    // MODE TEKS — GEMINI API
+    // ============================================================
+
     const apiKey = process.env.GEMINI_API_KEY;
+
     if (!apiKey) {
-      return res.status(500).json({ error: "GEMINI_API_KEY belum diset di environment variable Vercel." });
+      return res.status(500).json({
+        error:
+          "GEMINI_API_KEY belum diset di environment variable Vercel.",
+      });
     }
 
     let promptText = "";
+
+    // ============================================================
+    // LISTING
+    // ============================================================
+
     if (mode === "listing") {
       promptText = `Buatkan listing produk marketplace Indonesia berdasarkan foto yang dilampirkan.
 Nama: ${fields.nama || "-"}
@@ -142,60 +218,197 @@ Kategori: ${fields.kategori || "tebak dari foto"}
 Harga: ${fields.harga || "-"}
 Bahan/Spesifikasi: ${fields.bahan || "tebak dari foto"}
 Gaya bahasa: ${fields.gaya || "Formal"}
+
 Buat 3 versi berbeda satu sama lain:
-1. Shopee: judul singkat SEO-friendly (maks 100 karakter) + deskripsi dengan bullet point keunggulan
-2. Tokopedia: judul + deskripsi naratif yang meyakinkan
-3. TikTok Shop: judul catchy + deskripsi singkat dengan hook di awal, gaya santai
+
+1. Shopee:
+judul singkat SEO-friendly (maks 100 karakter) + deskripsi dengan bullet point keunggulan
+
+2. Tokopedia:
+judul + deskripsi naratif yang meyakinkan
+
+3. TikTok Shop:
+judul catchy + deskripsi singkat dengan hook di awal, gaya santai
+
 Hindari kalimat generik/pasaran seperti "kualitas terbaik" tanpa alasan spesifik.
-Balas HANYA JSON tanpa markdown fence: {"shopee":{"judul":"...","deskripsi":"..."},"tokopedia":{"judul":"...","deskripsi":"..."},"tiktok":{"judul":"...","deskripsi":"..."}}`;
-    } else if (mode === "ads") {
+
+Balas HANYA JSON tanpa markdown fence:
+
+{
+  "shopee": {
+    "judul": "...",
+    "deskripsi": "..."
+  },
+  "tokopedia": {
+    "judul": "...",
+    "deskripsi": "..."
+  },
+  "tiktok": {
+    "judul": "...",
+    "deskripsi": "..."
+  }
+}`;
+    }
+
+    // ============================================================
+    // ADS
+    // ============================================================
+
+    else if (mode === "ads") {
       promptText = `Buatkan 3 variasi hook & angle iklan Meta Ads untuk produk fisik di foto ini.
+
 Nama produk: ${fields.nama || "-"}
 Masalah yang diselesaikan: ${fields.masalah || "-"}
 Target pembeli: ${fields.target || "umum"}
-Tiap variasi harus beda angle/pendekatan. Sertakan hook pembuka, isi singkat, dan CTA.
-Balas HANYA JSON tanpa markdown fence: {"v1":{"hook":"...","isi":"...","cta":"..."},"v2":{"hook":"...","isi":"...","cta":"..."},"v3":{"hook":"...","isi":"...","cta":"..."}}`;
-    } else if (mode === "screenshot") {
-      promptText = `Analisis pola/struktur iklan pada screenshot yang dilampirkan (jenis hook, angle masalah, tone, struktur CTA) — jelaskan polanya, jangan kutip teks aslinya persis.
-Lalu buatkan copy iklan BARU dengan pola serupa (bukan niru mentah) untuk produk ini:
+
+Tiap variasi harus beda angle/pendekatan.
+
+Sertakan:
+- hook pembuka
+- isi singkat
+- CTA
+
+Balas HANYA JSON tanpa markdown fence:
+
+{
+  "v1": {
+    "hook": "...",
+    "isi": "...",
+    "cta": "..."
+  },
+  "v2": {
+    "hook": "...",
+    "isi": "...",
+    "cta": "..."
+  },
+  "v3": {
+    "hook": "...",
+    "isi": "...",
+    "cta": "..."
+  }
+}`;
+    }
+
+    // ============================================================
+    // SCREENSHOT
+    // ============================================================
+
+    else if (mode === "screenshot") {
+      promptText = `Analisis pola/struktur iklan pada screenshot yang dilampirkan.
+
+Analisis:
+- jenis hook
+- angle masalah
+- tone
+- struktur CTA
+
+Jelaskan polanya, jangan kutip teks aslinya persis.
+
+Lalu buatkan copy iklan BARU dengan pola serupa
+(bukan niru mentah) untuk produk ini:
+
 Nama produk: ${fields.nama || "-"}
 Keunggulan produk: ${fields.keunggulan || "-"}
-Balas HANYA JSON tanpa markdown fence: {"pola":"...","copy_baru":"..."}`;
-    } else {
-      return res.status(400).json({ error: "Mode tidak dikenali." });
+
+Balas HANYA JSON tanpa markdown fence:
+
+{
+  "pola": "...",
+  "copy_baru": "..."
+}`;
     }
+
+    // ============================================================
+    // MODE TIDAK DIKENALI
+    // ============================================================
+
+    else {
+      return res.status(400).json({
+        error: "Mode tidak dikenali.",
+      });
+    }
+
+    // ============================================================
+    // KIRIM KE GEMINI
+    // ============================================================
 
     const parts = [
       ...images.map((img) => ({
-        inline_data: { mime_type: img.mediaType, data: img.base64 },
+        inline_data: {
+          mime_type: img.mediaType,
+          data: img.base64,
+        },
       })),
-      { text: promptText },
+      {
+        text: promptText,
+      },
     ];
+
     const geminiRes = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts }] }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts,
+            },
+          ],
+        }),
       }
     );
+
     const data = await geminiRes.json();
+
     if (!geminiRes.ok) {
-      console.error("Gemini error:", data);
-      return res.status(502).json({ error: "Gagal memanggil Gemini API.", detail: data });
+      console.error(
+        "Gemini error:",
+        data
+      );
+
+      return res.status(502).json({
+        error: "Gagal memanggil Gemini API.",
+        detail: data,
+      });
     }
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const cleaned = rawText.replace(/```json|```/g, "").trim();
+
+    const rawText =
+      data?.candidates?.[0]?.content?.parts?.[0]
+        ?.text || "";
+
+    const cleaned = rawText
+      .replace(/```json|```/g, "")
+      .trim();
+
     let parsed;
+
     try {
       parsed = JSON.parse(cleaned);
     } catch (e) {
-      console.error("Gagal parse JSON dari Gemini:", rawText);
-      return res.status(502).json({ error: "AI memberi format yang tidak terbaca, coba generate ulang.", raw: rawText });
+      console.error(
+        "Gagal parse JSON dari Gemini:",
+        rawText
+      );
+
+      return res.status(502).json({
+        error:
+          "AI memberi format yang tidak terbaca, coba generate ulang.",
+        raw: rawText,
+      });
     }
-    return res.status(200).json({ result: parsed });
+
+    return res.status(200).json({
+      result: parsed,
+    });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: "Terjadi kesalahan server.", detail: String(err) });
+
+    return res.status(500).json({
+      error: "Terjadi kesalahan server.",
+      detail: String(err),
+    });
   }
 }
