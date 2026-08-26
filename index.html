@@ -464,57 +464,90 @@ function generate(panel){
   out.scrollIntoView({behavior:'smooth', block:'nearest'});
 
   if(panel === 'foto'){
-    var resultBox = document.getElementById('foto-result');
-    var images = fileStore.f2;
-    var styles = Array.from(document.querySelectorAll('[data-group="gayafoto"] .chip.on')).map(function(c){ return c.textContent; });
+  const images = fileStore.f2;
+  const resultBox = document.getElementById('foto-result');
 
-    if(!images || images.length === 0){
-      resultBox.innerHTML = '<p class="hint">Upload foto produk dulu ya.</p>';
-      return;
-    }
-    if(styles.length === 0){
-      resultBox.innerHTML = '<p class="hint">Pilih minimal 1 gaya dulu ya.</p>';
-      return;
-    }
-
-    resultBox.innerHTML = '<p class="hint">Sedang generate, mohon tunggu...</p>';
-
-    fetch('/api/generate', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ mode: 'foto', images: images, styles: styles })
-    })
-    .then(function(res){
-      return res.json().then(function(data){ return { ok: res.ok, data: data }; });
-    })
-    .then(function(result){
-      if(!result.ok){
-        resultBox.innerHTML = '<p class="hint">Gagal generate: ' + (result.data.error || 'coba lagi.') + '</p>';
-        return;
-      }
-      resultBox.innerHTML = '';
-      var items = (result.data.result && result.data.result.images) || [];
-      items.forEach(function(item){
-        var card = document.createElement('div');
-        card.className = 'foto-item';
-        if(item.error){
-          card.innerHTML = '<div class="flabel">' + item.style + '</div><p class="hint">' + item.error + '</p>';
-        } else {
-          var src = 'data:' + item.mimeType + ';base64,' + item.base64;
-          card.innerHTML = '<div class="flabel">' + item.style + '</div>' +
-            '<img src="' + src + '" alt="' + item.style + '">' +
-            '<a class="dl-btn" href="' + src + '" download="foto-' + item.style.replace(/\s+/g,'-').toLowerCase() + '.png">Download</a>';
-        }
-        resultBox.appendChild(card);
-      });
-    })
-    .catch(function(err){
-      console.error(err);
-      resultBox.innerHTML = '<p class="hint">Terjadi kesalahan koneksi, coba lagi.</p>';
-    });
+  if(!images || images.length === 0){
+    resultBox.innerHTML = '<pre>Upload foto produk dulu ya.</pre>';
     return;
   }
 
+  resultBox.innerHTML = '<pre>Sedang membuat prompt...</pre>';
+
+  const gaya = Array.from(
+    document.querySelectorAll('[data-group="gayafoto"] .chip.on')
+  ).map(chip => chip.textContent).join(', ');
+
+  try{
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        mode: 'foto',
+        images: [{ mediaType: images[0].mediaType, base64: images[0].base64 }],
+        fields: { gaya }
+      })
+    });
+
+    const data = await res.json();
+
+    if(!res.ok){
+      resultBox.innerHTML =
+        '<pre>Gagal membuat prompt: ' +
+        (data.error || 'coba lagi.') +
+        '</pre>';
+      console.error('Generate foto error:', data);
+      return;
+    }
+
+    const r = data.result;
+    resultBox.innerHTML = '';
+
+    const note = document.createElement('p');
+    note.style.fontSize = '12.5px';
+    note.style.color = 'var(--text-soft)';
+    note.style.marginBottom = '10px';
+    note.textContent = r.catatan_singkat || '';
+
+    const pre = document.createElement('pre');
+    pre.style.textAlign = 'left';
+    pre.style.background = '#fff';
+    pre.style.border = '1.5px solid var(--line)';
+    pre.style.borderRadius = '8px';
+    pre.style.padding = '12px';
+    pre.textContent = r.prompt_en || '';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'gen-btn';
+    copyBtn.style.marginTop = '10px';
+    copyBtn.textContent = 'Copy Prompt';
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(r.prompt_en || '').then(()=>{
+        copyBtn.textContent = 'Tersalin!';
+        setTimeout(()=> copyBtn.textContent = 'Copy Prompt', 1500);
+      });
+    };
+
+    const instruksi = document.createElement('p');
+    instruksi.style.fontSize = '12px';
+    instruksi.style.color = 'var(--text-soft)';
+    instruksi.style.marginTop = '10px';
+    instruksi.textContent = 'Cara pakai: buka ChatGPT/Gemini, upload foto produk asli kamu, paste prompt ini bersamaan, lalu kirim.';
+
+    resultBox.appendChild(note);
+    resultBox.appendChild(pre);
+    resultBox.appendChild(copyBtn);
+    resultBox.appendChild(instruksi);
+
+  } catch(err){
+    console.error(err);
+    resultBox.innerHTML =
+      '<pre>Terjadi kesalahan koneksi, coba lagi.</pre>';
+  }
+
+  return;
+}
   var mode, images, fields;
 
   if(panel === 'listing'){
