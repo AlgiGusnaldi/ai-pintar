@@ -153,15 +153,6 @@ textarea{min-height:72px; resize:vertical}
 }
 .result-card pre{white-space:pre-wrap; font-family:'Inter',sans-serif; font-size:13.5px; margin:0; line-height:1.6; color:var(--text)}
 
-.foto-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:14px}
-.foto-item{background:#fbfbfd; border:1.5px solid var(--line); border-radius:10px; padding:10px; text-align:center}
-.foto-item img{width:100%; border-radius:8px; display:block; margin-bottom:8px; background:var(--blue-soft)}
-.foto-item .flabel{font-size:11.5px; font-weight:600; color:var(--text-soft); margin-bottom:6px}
-.dl-btn{
-  font-size:11px; font-weight:700; background:var(--blue); color:#fff;
-  border:none; padding:6px 14px; border-radius:6px; cursor:pointer; text-decoration:none; display:inline-block;
-}
-
 .note{
   font-size:12.5px; color:var(--text-soft); background:#fff8ec; border:1px solid #f3e2b8;
   padding:12px 14px; border-radius:10px; margin-top:18px;
@@ -247,7 +238,7 @@ footer{text-align:center; font-size:11.5px; color:var(--text-soft); margin-top:2
 
   <section class="panel" id="foto">
     <h2>Optimalkan Foto Produk</h2>
-    <p class="sub">Upload foto produk apa adanya (boleh hasil jepretan HP), pilih gaya yang diinginkan, AI hasilkan beberapa versi foto yang siap dipasang di listing.</p>
+    <p class="sub">Upload foto produk apa adanya (boleh hasil jepretan HP), pilih gaya yang diinginkan. AI akan membuatkan PROMPT siap-pakai — kamu tinggal upload foto asli + paste prompt itu ke ChatGPT/Gemini untuk dapatkan hasil fotonya (gratis, tanpa biaya tambahan di sini).</p>
 
     <div class="field">
       <label>Foto Produk</label>
@@ -269,13 +260,13 @@ footer{text-align:center; font-size:11.5px; color:var(--text-soft); margin-top:2
         <div class="chip">Tambah Badge Best Seller</div>
         <div class="chip">Tambah Watermark Brand</div>
       </div>
-      <p class="hint">Setiap gaya yang dipilih menghasilkan versi foto sendiri-sendiri — bandingkan hasilnya, lalu pakai yang paling cocok. Proses bisa makan waktu beberapa detik.</p>
+      <p class="hint">Setiap gaya yang dipilih akan masuk ke dalam 1 prompt gabungan.</p>
     </div>
 
     <button class="gen-btn" onclick="generate('foto')">Generate</button>
 
     <div class="output" id="out-foto">
-      <div class="foto-grid" id="foto-result"></div>
+      <div class="result-card" id="foto-result"><pre>Menunggu di-generate...</pre></div>
     </div>
   </section>
 
@@ -458,99 +449,61 @@ function getActiveGaya(){
   return on ? on.textContent : 'Formal';
 }
 
+function renderFotoResult(r){
+  var box = document.getElementById('foto-result');
+  box.innerHTML = '';
+
+  var note = document.createElement('p');
+  note.style.fontSize = '12.5px';
+  note.style.color = 'var(--text-soft)';
+  note.style.marginBottom = '10px';
+  note.textContent = r.catatan_singkat || '';
+
+  var pre = document.createElement('pre');
+  pre.style.textAlign = 'left';
+  pre.style.background = '#fff';
+  pre.style.border = '1.5px solid var(--line)';
+  pre.style.borderRadius = '8px';
+  pre.style.padding = '12px';
+  pre.textContent = r.prompt_en || '';
+
+  var copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'gen-btn';
+  copyBtn.style.marginTop = '10px';
+  copyBtn.textContent = 'Copy Prompt';
+  copyBtn.onclick = function(){
+    navigator.clipboard.writeText(r.prompt_en || '').then(function(){
+      copyBtn.textContent = 'Tersalin!';
+      setTimeout(function(){ copyBtn.textContent = 'Copy Prompt'; }, 1500);
+    });
+  };
+
+  var instruksi = document.createElement('p');
+  instruksi.style.fontSize = '12px';
+  instruksi.style.color = 'var(--text-soft)';
+  instruksi.style.marginTop = '10px';
+  instruksi.textContent = 'Cara pakai: buka ChatGPT/Gemini, upload foto produk asli kamu, paste prompt ini bersamaan, lalu kirim.';
+
+  box.appendChild(note);
+  box.appendChild(pre);
+  box.appendChild(copyBtn);
+  box.appendChild(instruksi);
+}
+
 function generate(panel){
   var out = document.getElementById('out-'+panel);
   out.classList.add('show');
   out.scrollIntoView({behavior:'smooth', block:'nearest'});
 
-  if(panel === 'foto'){
-  const images = fileStore.f2;
-  const resultBox = document.getElementById('foto-result');
-
-  if(!images || images.length === 0){
-    resultBox.innerHTML = '<pre>Upload foto produk dulu ya.</pre>';
-    return;
-  }
-
-  resultBox.innerHTML = '<pre>Sedang membuat prompt...</pre>';
-
-  const gaya = Array.from(
-    document.querySelectorAll('[data-group="gayafoto"] .chip.on')
-  ).map(chip => chip.textContent).join(', ');
-
-  try{
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        mode: 'foto',
-        images: [{ mediaType: images[0].mediaType, base64: images[0].base64 }],
-        fields: { gaya }
-      })
-    });
-
-    const data = await res.json();
-
-    if(!res.ok){
-      resultBox.innerHTML =
-        '<pre>Gagal membuat prompt: ' +
-        (data.error || 'coba lagi.') +
-        '</pre>';
-      console.error('Generate foto error:', data);
-      return;
-    }
-
-    const r = data.result;
-    resultBox.innerHTML = '';
-
-    const note = document.createElement('p');
-    note.style.fontSize = '12.5px';
-    note.style.color = 'var(--text-soft)';
-    note.style.marginBottom = '10px';
-    note.textContent = r.catatan_singkat || '';
-
-    const pre = document.createElement('pre');
-    pre.style.textAlign = 'left';
-    pre.style.background = '#fff';
-    pre.style.border = '1.5px solid var(--line)';
-    pre.style.borderRadius = '8px';
-    pre.style.padding = '12px';
-    pre.textContent = r.prompt_en || '';
-
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className = 'gen-btn';
-    copyBtn.style.marginTop = '10px';
-    copyBtn.textContent = 'Copy Prompt';
-    copyBtn.onclick = () => {
-      navigator.clipboard.writeText(r.prompt_en || '').then(()=>{
-        copyBtn.textContent = 'Tersalin!';
-        setTimeout(()=> copyBtn.textContent = 'Copy Prompt', 1500);
-      });
-    };
-
-    const instruksi = document.createElement('p');
-    instruksi.style.fontSize = '12px';
-    instruksi.style.color = 'var(--text-soft)';
-    instruksi.style.marginTop = '10px';
-    instruksi.textContent = 'Cara pakai: buka ChatGPT/Gemini, upload foto produk asli kamu, paste prompt ini bersamaan, lalu kirim.';
-
-    resultBox.appendChild(note);
-    resultBox.appendChild(pre);
-    resultBox.appendChild(copyBtn);
-    resultBox.appendChild(instruksi);
-
-  } catch(err){
-    console.error(err);
-    resultBox.innerHTML =
-      '<pre>Terjadi kesalahan koneksi, coba lagi.</pre>';
-  }
-
-  return;
-}
   var mode, images, fields;
 
-  if(panel === 'listing'){
+  if(panel === 'foto'){
+    mode = 'foto';
+    images = fileStore.f2.length > 0 ? [fileStore.f2[0]] : [];
+    var gaya = Array.from(document.querySelectorAll('[data-group="gayafoto"] .chip.on')).map(function(c){ return c.textContent; }).join(', ');
+    fields = { gaya: gaya };
+  } else if(panel === 'listing'){
     mode = 'listing';
     images = fileStore.f1;
     fields = {
@@ -599,7 +552,9 @@ function generate(panel){
     }
     var r = result.data.result;
 
-    if(panel === 'listing'){
+    if(panel === 'foto'){
+      renderFotoResult(r);
+    } else if(panel === 'listing'){
       var cards = out.querySelectorAll('.result-card pre');
       cards[0].textContent = ((r.shopee && r.shopee.judul) || '') + '\n\n' + ((r.shopee && r.shopee.deskripsi) || '');
       cards[1].textContent = ((r.tokopedia && r.tokopedia.judul) || '') + '\n\n' + ((r.tokopedia && r.tokopedia.deskripsi) || '');
@@ -624,6 +579,7 @@ function generate(panel){
 
 document.querySelectorAll('.result-card').forEach(function(card){
   var label = card.querySelector('.rlabel');
+  if(!label) return;
   var btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'copy-btn';
