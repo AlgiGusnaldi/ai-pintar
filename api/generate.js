@@ -28,11 +28,14 @@ Gaya yang diinginkan untuk hasil akhir: ${gaya}
 
 Buatkan SATU prompt dalam Bahasa Inggris yang sangat detail dan siap pakai, yang nantinya akan di-paste oleh pengguna ke AI image generator (seperti ChatGPT/Gemini) BERSAMA dengan foto produk aslinya, supaya AI itu mengedit foto sesuai gaya yang diminta TANPA mengubah bentuk/desain/detail asli produknya.
 
-Prompt harus mencakup instruksi eksplisit:
-- Pertahankan bentuk, warna, logo, tulisan, dan semua detail produk asli
-- Deskripsi gaya akhir yang diinginkan (background, pencahayaan, komposisi)
-- Larangan menambah produk lain, teks promosi, watermark, atau elemen palsu
-- Hasil harus terlihat seperti foto produk marketplace profesional, bukan gambar AI yang terlihat artifisial
+PENTING — tujuan foto ini BUKAN sekadar "bersih dan rapi", tapi harus EYE-CATCHING: bikin orang berhenti scroll saat lihat, terlihat premium, dan menonjol dibanding foto produk kompetitor yang datar/generik. Jangan hasilkan instruksi yang menghasilkan foto flat/studio-abu-abu-membosankan.
+
+Prompt harus mencakup instruksi eksplisit tentang:
+- Pertahankan bentuk, warna, logo, tulisan, dan semua detail produk asli (non-negotiable)
+- Pencahayaan dramatis/kontras yang membuat produk "pop" (bukan flat lighting), misal rim light, soft shadow yang tegas, atau gradient background yang punya kedalaman warna (bukan abu-abu polos datar) — kecuali user secara eksplisit minta "putih polos", dalam hal itu pastikan putihnya benar-benar bersih (pure white, bukan keabuan)
+- Komposisi dinamis (angle sedikit miring/close-up ke detail menarik) kalau relevan, bukan selalu foto lurus depan yang membosankan
+- Larangan menambah produk lain atau teks promosi palsu
+- Hasil harus terlihat seperti foto produk premium/profesional kelas atas, bukan gambar AI generik yang artifisial atau flat
 
 Balas HANYA JSON tanpa markdown fence: {"prompt_en":"...", "catatan_singkat":"penjelasan 1 kalimat dalam Bahasa Indonesia tentang apa yang akan dihasilkan prompt ini"}`;
     } else if (mode === "listing") {
